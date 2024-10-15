@@ -1,18 +1,40 @@
 # 一键刷包脚本
 
 # 截取文件名字符段获取版本名
-function get_Version(){
-    local packV
-    packV=${1##*_}
-    packV=${packV%%.tar*}
-    echo "$packV"
+function get_tarVersion(){
+    local tarSocV
+    local tarMcuV
+    if [ $1 = "soc" ]; then
+        tarSocV=${2##*_}
+        tarSocV=${tarSocV%%.tar*}
+        echo "$tarSocV"
+    else
+        tarMcuVtmp=${2%%-*}
+        tarMcuV=$tarMcuVtmp"-"${2##*-}
+        echo "$tarMcuV"
+    fi
+}
+
+function filt_McuVersion(){
+    local rc
+    rc=${1#*:}
+    array=(${rc//./ })
+    for num in ${array[@]}
+    do
+        if [ $num == 0 ]; then
+            :
+        else
+            rc=""$num
+        fi
+    done
+    rc="rc"$rc
+    echo $rc
 }
 
 SOC=$(ls |grep xpilot*.gz)
 MCU=$(ls |grep Xpilot*.zip)
 ipcTool=$(ls |grep ipc_tools*.gz)
 
-packVersion=get_Version $SOC
 if [ -e $SOC -a $MCU -a $ipcTool ]; then
     :
 else
@@ -60,6 +82,7 @@ echo "刷写完成"
 
 echo "检查版本"
 
+echo "获取版本信息"
 orinA_socI=$(sshpass -p "nvidia" ssh -tt nvidia@172.20.1.22 'cat /xpilot/version.txt')
 orinB_socI=$(sshpass -p "nvidia" ssh -tt nvidia@172.20.1.30 'cat /xpilot/version.txt')
 bspInfoA=$(sshpass -p "nvidia" ssh -tt nvidia@172.20.1.22 'cat /etc/version')
@@ -69,29 +92,62 @@ orinB_mcuI=$(sshpass -p "nvidia" ssh -tt nvidia@172.20.1.22 '/xpilot/aurix_utili
 orinA_Vehicle=$(echo "$orinA_socI" | grep "Vehicle_model")
 orinB_Vehicle=$(echo "$orinB_socI" | grep "Vehicle_model")
 
+echo "过滤SOC版本信息"
 orinA_socV=$(echo "$orinA_socI" | grep "Version")
 orinA_socV=${orinA_socV#*v}
 orinA_socV=${orinA_socV%-*}
-
 orinB_socV=$(echo "$orinB_socI" | grep "Version")
 orinB_socV=${orinB_socV#*v}
 orinB_socV=${orinB_socV%-*}
-orinA_mcuV=$(echo "$orinA_mcuI" | grep "Aurix rc version")
-orinB_mcuV=$(echo "$orinB_mcuI" | grep "Aurix rc version")
-echo $orinA_socV
-echo $orinB_socV
-echo $(get_Version "$SOC")
+
+echo "过滤MCU版本信息"
+orinA_sw=$(echo "$orinA_mcuI" | grep "Aurix sw version")
+orinA_sw=${orinA_sw#*:}
+orinA_sw=$(echo "$orinA_sw" | tr -d '\r')
+orinA_rc=$(echo "$orinA_mcuI" | grep "Aurix rc version")
+orinA_rc=$(filt_McuVersion "$orinA_rc")
+orinA_rc=$(echo "$orinA_rc" | tr -d '\r')
+orinA_mcuV="$orinA_sw-$orinA_rc"
+
+orinB_sw=$(echo "$orinB_mcuI" | grep "Aurix sw version")
+orinB_sw=${orinB_sw#*:}
+orinB_sw=$(echo "$orinB_sw" | tr -d '\r')
+orinB_rc=$(echo "$orinB_mcuI" | grep "Aurix rc version")
+orinB_rc=$(filt_McuVersion "$orinB_rc")
+orinB_rc=$(echo "$orinB_rc" | tr -d '\r')
+orinB_mcuV="$orinB_sw-$orinB_rc"
+
+echo "--------------------------------------------------"
 
 if [ "$orinA_socV" = "$orinB_socV" ]; then
     echo "orin_a的SOC版本为：$orinA_socV"
     echo "orin_b的SOC版本为：$orinB_socV"
-    if [ $(get_Version "$SOC") = "$orinA_socV" ]; then
-        echo "SOC刷写正确"
+    tarSocV=$(get_tarVersion soc "$SOC")
+    if [ "$tarSocV" = "$orinA_socV" ]; then
+        echo "SOC版本与目标版本一致"
     else
+        echo "目标SOC版本为：$tarMcuV"
         echo "SOC版本与目标版本不一致,刷写失败,请重刷"
     fi
 else
     echo "orin_a和orin_b的SOC版本不一致，请重刷"
 fi
+
+echo "--------------------------------------------------"
+
+if [ orinA_mcuV=orinB_mcuV ]; then
+    echo "orin_a的MCU版本为：$orinA_mcuV"
+    echo "orin_b的MCU版本为：$orinB_mcuV"
+    tarMcuV=$(get_tarVersion mcu "$tarSocV")
+    if [ "$tarMcuV" = "$orinA_mcuV" ]; then
+        echo "MCU版本与目标版本一致"
+    else
+        echo "目标MCU版本为：$tarMcuV"
+        echo "MCU版本与目标版本不一致，刷写失败，请重刷"
+    fi
+else
+    echo "orin_a和orin_b的MCU版本不一致，请重刷"
+fi
+
 
 
