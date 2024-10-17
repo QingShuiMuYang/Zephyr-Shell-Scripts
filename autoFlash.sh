@@ -1,97 +1,320 @@
 # 一键刷包脚本
-
-# 截取文件名字符段获取版本名
-function get_Version(){
-    local packV
-    packV=${1##*_}
-    packV=${packV%%.tar*}
-    echo "$packV"
-}
+# code by zehan
 
 SOC=$(ls |grep xpilot*.gz)
-MCU=$(ls |grep Xpilot*.zip)
+MCU=$(ls |grep XPilot*.zip)
 ipcTool=$(ls |grep ipc_tools*.gz)
-
-packVersion=get_Version $SOC
-if [ -e $SOC -a $MCU -a $ipcTool ]; then
-    :
+xpuAddress="nvidia@172.20.1.22"
+xpusAddress="nvidia@172.20.1.30"
+if [ "$1" = "x" ]; then
+    if [ "$SOC" != "" -a "$MCU" != "" ]; then
+        echo "XLIDC文件准备齐全"
+    else
+        echo "XLIDC刷包文件准备不全，请将刷包文件存放在当前文件夹中"
+        exit
+    fi
 else
-    echo "刷包文件准备不全，请将刷包文件存放在当前文件夹中"
+    if [ "$SOC" != "" -a "$MCU" != "" -a "$ipcTool" != "" ]; then
+        echo "IPC文件准备齐全"
+    else
+        echo "IPC刷包文件准备不全，请将刷包文件存放在当前文件夹中"
+        exit
+    fi
 fi
 
-echo ----删除旧包----
-sudo rm -rf soc mcu ipcTools
-mkdir soc mcu ipcTools
+# 截取文件名字符段获取目标版本名
+function get_tarVersion(){
+    local tarSocV
+    local tarMcuV
+    local tarVehM
+    case $1 in
+        "soc")
+            tarSocV=${2##*_}
+            tarSocV=${tarSocV%%.tar*}
+            echo "$tarSocV"
+            ;;
+        "mcu")
+            tarMcuVtmp=${2%%-*}
+            tarMcuV="$tarMcuVtmp-${2##*-}"
+            tarMcuV="${tarMcuV%-*}-release"
+            echo "$tarMcuV"
+            ;;
+        "veh")
+            tarVehM=${SOC#*-}
+            tarVehM=${tarVehM%%-*}
+            tarVehM=$(echo "$tarVehM" | tr a-z A-Z)
+            echo "$tarVehM"
+            ;;
+    esac
+}
 
-echo "解压$SOC "
-tar -xvf xpilot*.gz -C ./soc
-
-echo "解压$ipcTool "
-tar -xvf ipc_tools*.gz -C ./ipcTools
-
-echo "解压$MCU "
-unzip -d ./mcu XPilot*.zip
-
-echo "开始刷写SOC..."
-cd soc
-echo "刷写orin_a"
-./deploy_xpilot.sh orin_a
-echo "刷写orin_b"
-./deploy_xpilot.sh orin_b
-
-fileName=$(ls $HOME/autoFlash/mcu/XPF)
-cp /home/$USER/autoFlash/mcu/XPF/$fileName/*APPA.hex ../aurix
-cp /home/$USER/autoFlash/mcu/XPF/$fileName/*APPB.hex ../aurix
-
-echo "开始刷写MCU..."
-cd ../aurix
-echo "刷写Master MCU"
-./aurix_v7.sh
-echo "刷写Slave MCU"
-./aurix_v7.sh S
-
-rm *.hex
-rm -rf ~/aeb_xviz ~/ap_xviz ~/hil_dds_forwarder ~/hil_xdds_replayer ~/idlPlugins ~/ipc_timesync ~/xdds_tools/release ~/xviz
-cd ..
-cp -r ./ipcTools/* ~/
-
-rm $SOC $MCU $ipcTool
-echo "刷写完成"
-
-echo "检查版本"
-
-orinA_socI=$(sshpass -p "nvidia" ssh -tt nvidia@172.20.1.22 'cat /xpilot/version.txt')
-orinB_socI=$(sshpass -p "nvidia" ssh -tt nvidia@172.20.1.30 'cat /xpilot/version.txt')
-bspInfoA=$(sshpass -p "nvidia" ssh -tt nvidia@172.20.1.22 'cat /etc/version')
-bspInfoB=$(sshpass -p "nvidia" ssh -tt nvidia@172.20.1.30 'cat /etc/version')
-orinA_mcuI=$(sshpass -p "nvidia" ssh -tt nvidia@172.20.1.22 '/xpilot/aurix_utility/aurix_utility -v')
-orinB_mcuI=$(sshpass -p "nvidia" ssh -tt nvidia@172.20.1.22 '/xpilot/aurix_utility/aurix_utility -v --m=1')
-orinA_Vehicle=$(echo "$orinA_socI" | grep "Vehicle_model")
-orinB_Vehicle=$(echo "$orinB_socI" | grep "Vehicle_model")
-
-orinA_socV=$(echo "$orinA_socI" | grep "Version")
-orinA_socV=${orinA_socV#*v}
-orinA_socV=${orinA_socV%-*}
-
-orinB_socV=$(echo "$orinB_socI" | grep "Version")
-orinB_socV=${orinB_socV#*v}
-orinB_socV=${orinB_socV%-*}
-orinA_mcuV=$(echo "$orinA_mcuI" | grep "Aurix rc version")
-orinB_mcuV=$(echo "$orinB_mcuI" | grep "Aurix rc version")
-echo $orinA_socV
-echo $orinB_socV
-echo $(get_Version "$SOC")
-
-if [ "$orinA_socV" = "$orinB_socV" ]; then
-    echo "orin_a的SOC版本为：$orinA_socV"
-    echo "orin_b的SOC版本为：$orinB_socV"
-    if [ $(get_Version "$SOC") = "$orinA_socV" ]; then
-        echo "SOC刷写正确"
+# 处理获取到的MCU版本
+function filt_mcuVersion(){
+    local rc
+    rc=${1#*:}
+    rc=$(echo "$rc" | tr -d "\r")
+    array=(${rc//./ })
+    for num in ${array[@]}
+    do
+        if [ $num == 0 ]; then
+            :
+        else
+            rc=""$num
+        fi
+    done
+    if [ ${#rc} -le 3 ]; then  
+        rc="rc"$rc
     else
+        rc="release"
+    fi
+    echo $rc
+}
+
+# 获取SOC版本
+function get_socVersion(){
+    socV=$(sshpass -p "nvidia" ssh -tt -o StrictHostKeyChecking=no $1 "cat /xpilot/version.txt")
+    socV=$(echo "$socV" | grep "Version")
+    socV=${socV#*v}
+    socV=${socV%-*}
+    echo $socV
+}
+
+# 获取MCU版本
+function get_mcuVersion(){
+    local mcuI
+    local mcuV
+    if [ $1 = "a" ]; then
+        mcuI=$(sshpass -p "nvidia" ssh -tt -o StrictHostKeyChecking=no $2 "/xpilot/aurix_utility/aurix_utility -v")
+    else
+        mcuI=$(sshpass -p "nvidia" ssh -tt -o StrictHostKeyChecking=no $1 "/xpilot/aurix_utility/aurix_utility -v --m=1")
+    fi
+    sw=$(echo "$mcuI" | grep "Aurix sw version")
+    sw=${sw#*:}
+    sw=$(echo "$sw" | tr -d '\r')
+    rc=$(echo "$mcuI" | grep "Aurix rc version")
+    rc=$(filt_mcuVersion "$rc")
+    mcuV="$sw-$rc"
+    echo "$mcuV"
+}
+
+# 获取车型编号
+function get_vehicleModel(){
+    local socI
+    local vehiM
+    socI=$(sshpass -p "nvidia" ssh -tt -o StrictHostKeyChecking=no $1 "cat /xpilot/version.txt")
+    vehiM=$(echo "$socI" | grep "Vehicle_model")
+    vehiM=${vehiM#*:}
+    vehiM=$(echo "$vehiM" | tr -d "\r")
+    echo "$vehiM"
+}
+
+function flash_Software(){
+    case $1 in
+        "socA")
+            cd ~/autoFlash/soc
+            ./deploy_xpilot.sh orin_a
+            if [ $(grep -c "Reset XPU apps Done" $HOME/autoFlash/soc/deploy_log.txt) -ne "0" ]; then
+                echo "刷写A区SOC成功"
+                echo "刷写A区SOC成功"
+                echo "刷写A区SOC成功"
+                echo "刷写A区SOC成功"
+                echo "刷写A区SOC成功"
+            else
+                echo "刷写A区SOC失败"
+                echo "第二次重刷..."
+                cd ~/autoFlash/soc
+                ./deploy_xpilot.sh orin_a
+                if [ $(grep -c "Reset XPU apps Done" $HOME/autoFlash/soc/deploy_log.txt) -ne "0" ]; then
+                    echo "刷写A区SOC成功"
+                    echo "刷写A区SOC成功"
+                    echo "刷写A区SOC成功"
+                    echo "刷写A区SOC成功"
+                    echo "刷写A区SOC成功"
+                else
+                    echo "刷写A区SOC失败，请联系工程师"
+                    exit
+                fi
+            fi
+            ;;
+        "socB")
+            cd ~/autoFlash/soc
+            ./deploy_xpilot.sh orin_b
+            if [ $(grep -c "Reset XPU apps Done" $HOME/autoFlash/soc/deploy_log.txt) -ne "0" ]; then
+                echo "刷写B区SOC成功"
+                echo "刷写B区SOC成功"
+                echo "刷写B区SOC成功"
+                echo "刷写B区SOC成功"
+                echo "刷写B区SOC成功"
+            else
+                echo "刷写B区SOC失败"
+                echo "第二次重刷..."
+                cd ~/autoFlash/soc
+                ./deploy_xpilot.sh orin_b
+                if [ $(grep -c "Reset XPU apps Done" $HOME/autoFlash/soc/deploy_log.txt) -ne "0" ]; then
+                    echo "刷写B区SOC成功"
+                    echo "刷写B区SOC成功"
+                    echo "刷写B区SOC成功"
+                    echo "刷写B区SOC成功"
+                    echo "刷写B区SOC成功"
+                else
+                    echo "刷写B区SOC失败，请联系工程师"
+                    exit
+                fi
+            fi
+            ;;
+        "mcuA")
+            cd ~/autoFlash/aurix
+            masterOutput=$(./aurix_v7.sh)
+            successMa=$(echo "$masterOutput" | grep -c "Both partition flashed successfully!")
+            if [ $successMa -ne "0" ]; then
+                echo "刷写A区MCU成功"
+                echo "刷写A区MCU成功"
+                echo "刷写A区MCU成功"
+                echo "刷写A区MCU成功"
+                echo "刷写A区MCU成功"
+            else
+                echo "刷写A区MCU失败"
+                echo "第二次重刷..."
+                cd ~/autoFlash/aurix
+                masterOutput=$(./aurix_v7.sh)
+                successMa=$(echo "$masterOutput" | grep -c "Both partition flashed successfully!")
+                if [ $successMa -ne "0" ]; then
+                    echo "刷写A区MCU成功"
+                    echo "刷写A区MCU成功"
+                    echo "刷写A区MCU成功"
+                    echo "刷写A区MCU成功"
+                    echo "刷写A区MCU成功"
+                else
+                    echo "刷写A区MCU失败，请联系工程师"
+                    exit
+                fi
+            fi
+            rm $HOME/autoFlash/aurix/*APPA.hex
+            ;;
+        "mcuB")
+            cd ~/autoFlash/aurix
+            slaveOutput=$(./aurix_v7.sh S)
+            successMb=$(echo "$slaveOutput" | grep -c "Both partition flashed successfully!")
+            if [ $successMb -ne "0" ]; then
+                echo "刷写B区MCU成功"
+                echo "刷写B区MCU成功"
+                echo "刷写B区MCU成功"
+                echo "刷写B区MCU成功"
+                echo "刷写B区MCU成功"
+            else
+                echo "刷写B区MCU失败"
+                echo "第二次重刷..."
+                cd ~/autoFlash/aurix
+                slaveOutput=$(./aurix_v7.sh S)
+                successMb=$(echo "$slaveOutput" | grep -c "Both partition flashed successfully!")
+                if [ $successMa -ne "0" ]; then
+                    echo "刷写B区MCU成功"
+                    echo "刷写B区MCU成功"
+                    echo "刷写B区MCU成功"
+                    echo "刷写B区MCU成功"
+                    echo "刷写B区MCU成功"
+                else
+                    echo "刷写B区MCU失败，请联系工程师"
+                    exit
+                fi
+            fi
+            rm $HOME/autoFlash/aurix/*APPB.hex
+            ;;
+    esac
+}
+
+echo "删除旧包..."
+sudo rm -rf $HOME/autoFlash/soc $HOME/autoFlash/mcu $HOME/autoFlash/ipcTools
+mkdir $HOME/autoFlash/soc $HOME/autoFlash/mcu $HOME/autoFlash/ipcTools
+
+echo "解压$SOC..."
+tar -xvf $SOC -C $HOME/autoFlash/soc
+
+echo "解压$ipcTool..."
+tar -xvf $ipcTool -C $HOME/autoFlash/ipcTools
+
+echo "解压$MCU..."
+unzip -d $HOME/autoFlash/mcu $MCU
+
+fileTmp=$(ls $HOME/autoFlash/mcu/XPF)
+cp $HOME/autoFlash/mcu/XPF/$fileTmp/*APPA.hex $HOME/autoFlash/aurix
+cp $HOME/autoFlash/mcu/XPF/$fileTmp/*APPB.hex $HOME/autoFlash/aurix
+
+if [ "$1" != "x" ]; then
+    rm -rf $HOME/aeb_xviz $HOME/ap_xviz $HOME/hil_dds_forwarder $HOME/hil_xdds_replayer $HOME/idlPlugins $HOME/ipc_timesync $HOME/xdds_tools/release $HOME/xviz
+    cp -r $HOME/autoFlash/ipcTools/* $HOME/
+fi
+
+
+#获取历史版本
+pre_orinA_socV=$(get_socVersion $xpuAddress)
+pre_orinB_socV=$(get_socVersion $xpusAddress)
+pre_orinA_mcuV=$(get_mcuVersion a $xpuAddress)
+pre_orinB_mcuV=$(get_mcuVersion $xpuAddress)
+vehModel=$(get_vehicleModel $xpuAddress)    #历史车型
+tarVehM=$(get_tarVersion veh)               #当前包中车型
+
+if [ $tarVehM = $vehModel ]; then
+    flash_Software socA
+    flash_Software socB
+    flash_Software mcuA
+    flash_Software mcuB
+    echo "SOC及MCU刷写完成"
+    echo "SOC及MCU刷写完成"
+    echo "SOC及MCU刷写完成"
+else
+    echo "目标车型与历史车型不一致，请确认你的包是否下载错误"
+fi
+
+echo "检查版本..."
+
+orinA_socV=$(get_socVersion $xpuAddress)
+orinB_socV=$(get_socVersion $xpusAddress)
+orinA_mcuV=$(get_mcuVersion a $xpuAddress)
+orinB_mcuV=$(get_mcuVersion $xpuAddress)
+
+echo "--------------------------------------------------"
+echo "--------------------------------------------------"
+
+echo "orin_a的历史SOC版本：$pre_orinA_socV"
+echo "orin_b的历史SOC版本：$pre_orinB_socV"
+
+echo "--------------------------------------------------"
+if [ "$orinA_socV" = "$orinB_socV" ]; then
+    echo "orin_a的当前SOC版本为：$orinA_socV"
+    echo "orin_b的当前SOC版本为：$orinB_socV"
+    tarSocV=$(get_tarVersion soc "$SOC")
+    if [ "$tarSocV" = "$orinA_socV" ]; then
+        echo "SOC版本与目标版本一致"
+    else
+        echo "目标SOC版本为：$tarSocV"
         echo "SOC版本与目标版本不一致,刷写失败,请重刷"
     fi
 else
     echo "orin_a和orin_b的SOC版本不一致，请重刷"
 fi
+
+echo "--------------------------------------------------"
+echo "--------------------------------------------------"
+
+echo "orin_a的历史MCU版本：$pre_orinA_mcuV"
+echo "orin_b的历史MCU版本：$pre_orinB_mcuV"
+echo "--------------------------------------------------"
+if [ orinA_mcuV=orinB_mcuV ]; then
+    echo "orin_a的当前MCU版本为：$orinA_mcuV"
+    echo "orin_b的当前MCU版本为：$orinB_mcuV"
+    tarMcuV=$(get_tarVersion mcu "$tarSocV")
+    if [ "$tarMcuV" = "$orinA_mcuV" ]; then
+        echo "MCU版本与目标版本一致"
+        rm $HOME/autoFlash/$SOC $HOME/autoFlash/$MCU $HOME/autoFlash/$ipcTool
+    else
+        echo "目标MCU版本为：$tarMcuV"
+        echo "MCU版本与目标版本不一致，刷写失败，请重刷"
+    fi
+else
+    echo "orin_a和orin_b的MCU版本不一致，请重刷"
+fi
+echo "--------------------------------------------------"
+
 
 
