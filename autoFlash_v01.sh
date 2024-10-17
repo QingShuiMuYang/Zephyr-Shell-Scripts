@@ -168,60 +168,12 @@ function flash_Software(){
             ;;
         "mcuA")
             cd ~/autoFlash/aurix
-            masterOutput=$(./aurix_v7.sh)
-            successMa=$(echo "$masterOutput" | grep -c "Both partition flashed successfully!")
-            if [ $successMa -ne "0" ]; then
-                echo "刷写A区MCU成功"
-                echo "刷写A区MCU成功"
-                echo "刷写A区MCU成功"
-                echo "刷写A区MCU成功"
-                echo "刷写A区MCU成功"
-            else
-                echo "刷写A区MCU失败"
-                echo "第二次重刷..."
-                cd ~/autoFlash/aurix
-                masterOutput=$(./aurix_v7.sh)
-                successMa=$(echo "$masterOutput" | grep -c "Both partition flashed successfully!")
-                if [ $successMa -ne "0" ]; then
-                    echo "刷写A区MCU成功"
-                    echo "刷写A区MCU成功"
-                    echo "刷写A区MCU成功"
-                    echo "刷写A区MCU成功"
-                    echo "刷写A区MCU成功"
-                else
-                    echo "刷写A区MCU失败，请联系工程师"
-                    exit
-                fi
-            fi
+            ./aurix_v7.sh
             rm $HOME/autoFlash/aurix/*APPA.hex
             ;;
         "mcuB")
             cd ~/autoFlash/aurix
-            slaveOutput=$(./aurix_v7.sh S)
-            successMb=$(echo "$slaveOutput" | grep -c "Both partition flashed successfully!")
-            if [ $successMb -ne "0" ]; then
-                echo "刷写B区MCU成功"
-                echo "刷写B区MCU成功"
-                echo "刷写B区MCU成功"
-                echo "刷写B区MCU成功"
-                echo "刷写B区MCU成功"
-            else
-                echo "刷写B区MCU失败"
-                echo "第二次重刷..."
-                cd ~/autoFlash/aurix
-                slaveOutput=$(./aurix_v7.sh S)
-                successMb=$(echo "$slaveOutput" | grep -c "Both partition flashed successfully!")
-                if [ $successMa -ne "0" ]; then
-                    echo "刷写B区MCU成功"
-                    echo "刷写B区MCU成功"
-                    echo "刷写B区MCU成功"
-                    echo "刷写B区MCU成功"
-                    echo "刷写B区MCU成功"
-                else
-                    echo "刷写B区MCU失败，请联系工程师"
-                    exit
-                fi
-            fi
+            ./aurix_v7.sh S
             rm $HOME/autoFlash/aurix/*APPB.hex
             ;;
     esac
