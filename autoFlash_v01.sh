@@ -1,6 +1,5 @@
 # 一键刷包脚本
 # code by zehan
-set -x
 SOC=$(ls |grep xpilot*.gz)
 MCU=$(ls |grep XPilot*.zip)
 ipcTool=$(ls |grep ipc_tools*.gz)
